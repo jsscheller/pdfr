@@ -1,0 +1,26 @@
+[package]
+resolver = "2" # fixes https://github.com/rust-lang/cargo/issues/7914
+name = "pdfr"
+version = "0.0.1"
+edition = "2018"
+
+[profile.release]
+opt-level = "z"  # Optimize for size.
+lto = true
+codegen-units = 1
+
+[dependencies]
+anyhow = "1.0.58"
+clap = { version = "3.2.5", features = ["color", "suggestions", "derive"] }
+pdfium-sys = { path = "./pdfium-sys" }
+serde = { version = "1.0.139", features = ["derive"] }
+serde_json = "1.0.82"
+utf16string = "0.2.0"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies.image]
+version = "0.23.14"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.image]
+version = "0.23.14"
+default-features = false
+features = ["gif", "jpeg", "ico", "png", "pnm", "tga", "tiff", "webp", "bmp", "hdr", "dxt", "dds", "farbfeld"]
