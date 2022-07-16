@@ -1,5 +1,6 @@
 use anyhow::anyhow;
-use image::{codecs, ColorType, DynamicImage, EncodableLayout, GenericImageView, ImageEncoder};
+use image::{DynamicImage, EncodableLayout, GenericImageView};
+use libjpegturbo_sys as j;
 use pdfium_sys as p;
 use std::ffi::c_void;
 use std::ffi::CString;
@@ -7,7 +8,7 @@ use std::io::Write;
 use std::ops::Deref;
 use std::os::raw::{c_int, c_ulong};
 use std::path::Path;
-use std::{fmt, ptr, slice};
+use std::{fmt, mem, ptr, slice};
 use utf16string::{LittleEndian, WString};
 
 type Result<T> = std::result::Result<T, PDFiumError>;
@@ -405,22 +406,60 @@ impl Bitmap {
         }
     }
 
-    pub fn write_image(&self, w: &mut impl Write, quality: u8) -> anyhow::Result<()> {
-        let color_type = match self.format() {
-            p::FPDFBitmap_Gray => ColorType::L8,
-            p::FPDFBitmap_BGR => ColorType::Bgr8,
-            p::FPDFBitmap_BGRA | p::FPDFBitmap_BGRx => ColorType::Bgra8,
-            _ => {
-                return Err(anyhow!("unknown bitmap format"));
+    // `libjpegturbo` is about 4x faster than rust's `image`.
+    pub fn write_image(&self, path: impl AsRef<Path>, quality: u8) -> anyhow::Result<()> {
+        unsafe {
+            let file_name = CString::new(path.as_ref().to_str().unwrap().to_string()).unwrap();
+            let mode = CString::new("wb").unwrap();
+            let fh = libc::fopen(file_name.as_ptr(), mode.as_ptr());
+
+            let mut err = mem::zeroed();
+            let mut cinfo: j::jpeg_compress_struct = mem::zeroed();
+            cinfo.err = j::jpeg_std_error(&mut err);
+            #[cfg(target_arch = "wasm32")]
+            let struct_size = mem::size_of::<j::jpeg_compress_struct>() as u32;
+            #[cfg(not(target_arch = "wasm32"))]
+            let struct_size = mem::size_of::<j::jpeg_compress_struct>() as u64;
+            j::jpeg_CreateCompress(
+                &mut cinfo,
+                80, // Version
+                struct_size,
+            );
+            j::jpeg_stdio_dest(&mut cinfo, fh as *mut j::FILE);
+
+            cinfo.image_width = self.width() as u32;
+            cinfo.image_height = self.height() as u32;
+            let (color_space, input_components) = match self.format() {
+                p::FPDFBitmap_Gray => (j::J_COLOR_SPACE_JCS_GRAYSCALE, 1),
+                p::FPDFBitmap_BGR => (j::J_COLOR_SPACE_JCS_EXT_BGR, 3),
+                p::FPDFBitmap_BGRx => (j::J_COLOR_SPACE_JCS_EXT_BGRX, 4),
+                p::FPDFBitmap_BGRA => (j::J_COLOR_SPACE_JCS_EXT_BGRA, 4),
+                _ => {
+                    libc::fclose(fh);
+                    return Err(anyhow!("unknown image format"));
+                }
+            };
+            cinfo.in_color_space = color_space;
+            cinfo.input_components = input_components;
+            j::jpeg_set_defaults(&mut cinfo);
+
+            cinfo.dct_method = j::J_DCT_METHOD_JDCT_ISLOW;
+            j::jpeg_set_quality(&mut cinfo, quality as i32, 1);
+
+            j::jpeg_start_compress(&mut cinfo, 1);
+
+            let stride = self.stride() as isize;
+            let buf = self.buffer().as_mut_ptr();
+            while cinfo.next_scanline < cinfo.image_height {
+                let offset = cinfo.next_scanline as isize * stride;
+                let mut jsamparray = [buf.offset(offset)];
+                j::jpeg_write_scanlines(&mut cinfo, jsamparray.as_mut_ptr(), 1);
             }
-        };
-        let enc = codecs::jpeg::JpegEncoder::new_with_quality(w, quality);
-        enc.write_image(
-            self.buffer(),
-            self.width() as u32,
-            self.height() as u32,
-            color_type,
-        )?;
+
+            j::jpeg_finish_compress(&mut cinfo);
+            j::jpeg_destroy_compress(&mut cinfo);
+            libc::fclose(fh);
+        }
         Ok(())
     }
 }

@@ -4,9 +4,8 @@ use crate::syntax::{Intervals, Size};
 use anyhow::Result;
 use clap::Args;
 use pdfium_sys as p;
-use std::fs::{self, File};
-use std::mem;
 use std::path::PathBuf;
+use std::{fs, mem};
 
 /// render PDF pages to JPEG images
 #[derive(Args)]
@@ -100,12 +99,7 @@ impl Command for RenderCommand {
                     pos
                 ))
                 .with_extension("jpg");
-            let mut f = File::options()
-                .write(true)
-                .truncate(true)
-                .create(true)
-                .open(&image_path)?;
-            bmp.write_image(&mut f, self.quality)?;
+            bmp.write_image(&image_path, self.quality)?;
         }
         Ok(())
     }

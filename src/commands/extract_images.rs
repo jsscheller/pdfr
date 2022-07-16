@@ -2,7 +2,7 @@ use super::Command;
 use crate::bindings::Document;
 use anyhow::Result;
 use clap::Args;
-use std::fs::{self, File};
+use std::fs;
 use std::path::PathBuf;
 
 /// extract embedded images from a PDF
@@ -56,12 +56,7 @@ impl Command for ExtractImagesCommand {
                             self.pdf.file_stem().unwrap().to_str().unwrap(),
                         ))
                         .with_extension("jpg");
-                    let mut f = File::options()
-                        .write(true)
-                        .truncate(true)
-                        .create(true)
-                        .open(&image_path)?;
-                    bmp.write_image(&mut f, self.quality)?;
+                    bmp.write_image(&image_path, self.quality)?;
                 }
             }
         }
